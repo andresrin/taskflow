@@ -5,7 +5,7 @@
 
 // ⚠️  REEMPLAZA esta URL con la que te genera AWS API Gateway
 //     Ejemplo: https://abc123def.execute-api.us-east-1.amazonaws.com/prod
-const API_URL = "https://TU_API_GATEWAY_URL/prod";
+const API_URL = "https://zdqpudofh3.execute-api.us-east-1.amazonaws.com/prod";
 
 // ============================================================
 //  UTILIDADES
