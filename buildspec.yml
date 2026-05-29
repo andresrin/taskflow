@@ -1,0 +1,107 @@
+version: 0.2
+
+# ════════════════════════════════════════════════════════════
+#  buildspec.yml — TaskFlow
+#  Instrucciones para CodeBuild:
+#  1. Instalar dependencias
+#  2. Ejecutar pruebas unitarias
+#  3. Empaquetar funciones Lambda en ZIPs
+#  4. Desplegar frontend a S3
+#  5. Actualizar funciones Lambda con nuevo código
+# ════════════════════════════════════════════════════════════
+
+env:
+  variables:
+    PROJECT_NAME: "taskflow"
+    PYTHON_VERSION: "3.12"
+  # Las siguientes variables se configuran en CodeBuild/CodePipeline:
+  # FRONTEND_BUCKET  → nombre del bucket S3 del frontend
+  # ARTIFACTS_BUCKET → nombre del bucket S3 de artefactos
+
+phases:
+
+  # ── FASE 1: Instalar herramientas ──────────────────────────
+  install:
+    runtime-versions:
+      python: "3.12"
+    commands:
+      - echo "=== [1/5] Instalando dependencias ==="
+      - pip install --upgrade pip --quiet
+      - pip install pytest boto3 --quiet
+      - echo "Python version:" && python --version
+      - echo "AWS CLI version:" && aws --version
+
+  # ── FASE 2: Pruebas unitarias ──────────────────────────────
+  pre_build:
+    commands:
+      - echo "=== [2/5] Ejecutando pruebas unitarias ==="
+      - python -m pytest tests/ -v --tb=short
+      - echo "✓ Todas las pruebas pasaron."
+
+  # ── FASE 3: Empaquetar Lambdas + Deploy frontend ───────────
+  build:
+    commands:
+      - echo "=== [3/5] Empaquetando funciones Lambda ==="
+      - mkdir -p artifacts
+
+      # Empaquetar cada función en su propio ZIP
+      - cd backend/list_tasks   && zip -r ../../artifacts/list_tasks.zip   . && cd ../..
+      - cd backend/create_task  && zip -r ../../artifacts/create_task.zip  . && cd ../..
+      - cd backend/update_task  && zip -r ../../artifacts/update_task.zip  . && cd ../..
+      - cd backend/delete_task  && zip -r ../../artifacts/delete_task.zip  . && cd ../..
+
+      - echo "ZIPs generados:"
+      - ls -lh artifacts/
+
+      - echo "=== [4/5] Subiendo artefactos a S3 ==="
+      - aws s3 cp artifacts/list_tasks.zip   s3://${ARTIFACTS_BUCKET}/list_tasks.zip
+      - aws s3 cp artifacts/create_task.zip  s3://${ARTIFACTS_BUCKET}/create_task.zip
+      - aws s3 cp artifacts/update_task.zip  s3://${ARTIFACTS_BUCKET}/update_task.zip
+      - aws s3 cp artifacts/delete_task.zip  s3://${ARTIFACTS_BUCKET}/delete_task.zip
+
+      - echo "=== Desplegando frontend a S3 ==="
+      - aws s3 sync frontend/ s3://${FRONTEND_BUCKET}/ --delete --quiet
+      - echo "✓ Frontend desplegado."
+
+  # ── FASE 4: Actualizar Lambdas en AWS ──────────────────────
+  post_build:
+    commands:
+      - echo "=== [5/5] Actualizando funciones Lambda ==="
+
+      - |
+        aws lambda update-function-code \
+          --function-name ${PROJECT_NAME}-list \
+          --s3-bucket ${ARTIFACTS_BUCKET} \
+          --s3-key list_tasks.zip \
+          --no-cli-pager
+
+      - |
+        aws lambda update-function-code \
+          --function-name ${PROJECT_NAME}-create \
+          --s3-bucket ${ARTIFACTS_BUCKET} \
+          --s3-key create_task.zip \
+          --no-cli-pager
+
+      - |
+        aws lambda update-function-code \
+          --function-name ${PROJECT_NAME}-update \
+          --s3-bucket ${ARTIFACTS_BUCKET} \
+          --s3-key update_task.zip \
+          --no-cli-pager
+
+      - |
+        aws lambda update-function-code \
+          --function-name ${PROJECT_NAME}-delete \
+          --s3-bucket ${ARTIFACTS_BUCKET} \
+          --s3-key delete_task.zip \
+          --no-cli-pager
+
+      - echo "✓ Deploy completado exitosamente."
+      - echo "Timestamp:" && date
+
+# ── Artefactos que CodePipeline guarda tras el build ────────
+artifacts:
+  files:
+    - artifacts/**
+    - frontend/**
+  discard-paths: no

@@ -1,0 +1,462 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  TaskFlow - Gestor de Tareas Serverless
+  Infraestructura completa: DynamoDB, Lambda, API Gateway, IAM, S3, CloudWatch
+
+# ════════════════════════════════════════════════════════════
+#  PARÁMETROS
+# ════════════════════════════════════════════════════════════
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: taskflow
+    Description: Prefijo para nombrar todos los recursos
+
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging, dev]
+    Description: Ambiente de despliegue
+
+  ArtifactsBucket:
+    Type: String
+    Description: Bucket S3 donde CodeBuild subió los ZIPs de Lambda
+    Default: taskflow-artifacts-bucket
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    Description: Días de retención de logs en CloudWatch
+
+# ════════════════════════════════════════════════════════════
+#  RECURSOS
+# ════════════════════════════════════════════════════════════
+Resources:
+
+  # ──────────────────────────────────────────────────────────
+  #  1. DYNAMODB — Tabla de tareas
+  # ──────────────────────────────────────────────────────────
+  TasksTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName: !Sub '${ProjectName}-tasks'
+      BillingMode: PAY_PER_REQUEST   # Free Tier / pago por uso
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ──────────────────────────────────────────────────────────
+  #  2. S3 — Bucket para el frontend estático
+  # ──────────────────────────────────────────────────────────
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-frontend-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+  # ──────────────────────────────────────────────────────────
+  #  3. IAM — Rol de ejecución para Lambda
+  # ──────────────────────────────────────────────────────────
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TaskFlowLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permisos DynamoDB — solo la tabla del proyecto
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt TasksTable.Arn
+              # Permisos CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ──────────────────────────────────────────────────────────
+  #  4. LAMBDA — Funciones individuales por endpoint
+  # ──────────────────────────────────────────────────────────
+
+  # 4a. Listar tareas (GET /tasks)
+  ListTasksFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-list'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: list_tasks.zip
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TasksTable
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # 4b. Crear tarea (POST /tasks)
+  CreateTaskFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-create'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: create_task.zip
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TasksTable
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # 4c. Actualizar tarea (PUT /tasks/{id})
+  UpdateTaskFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-update'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: update_task.zip
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TasksTable
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # 4d. Eliminar tarea (DELETE /tasks/{id})
+  DeleteTaskFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-delete'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: delete_task.zip
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TasksTable
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ──────────────────────────────────────────────────────────
+  #  5. CLOUDWATCH — Grupos de logs con retención
+  # ──────────────────────────────────────────────────────────
+  LogGroupList:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-list'
+      RetentionInDays: !Ref LogRetentionDays
+
+  LogGroupCreate:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-create'
+      RetentionInDays: !Ref LogRetentionDays
+
+  LogGroupUpdate:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-update'
+      RetentionInDays: !Ref LogRetentionDays
+
+  LogGroupDelete:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-delete'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Alarma: tasa de errores Lambda > 5%
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-lambda-errors'
+      AlarmDescription: 'Alerta cuando Lambda tiene errores frecuentes'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300          # 5 minutos
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # ──────────────────────────────────────────────────────────
+  #  6. API GATEWAY — REST API completa
+  # ──────────────────────────────────────────────────────────
+  TaskFlowApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ProjectName}-api'
+      Description: 'API REST de TaskFlow — Gestor de Tareas'
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  # Recurso: /tasks
+  TasksResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ParentId: !GetAtt TaskFlowApi.RootResourceId
+      PathPart: tasks
+
+  # Recurso: /tasks/{id}
+  TaskByIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ParentId: !Ref TasksResource
+      PathPart: '{id}'
+
+  # ── GET /tasks ──
+  GetTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListTasksFunction.Arn}/invocations'
+
+  # ── POST /tasks ──
+  PostTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateTaskFunction.Arn}/invocations'
+
+  # ── PUT /tasks/{id} ──
+  PutTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TaskByIdResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateTaskFunction.Arn}/invocations'
+
+  # ── DELETE /tasks/{id} ──
+  DeleteTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TaskByIdResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteTaskFunction.Arn}/invocations'
+
+  # ── OPTIONS /tasks (CORS preflight) ──
+  OptionsTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # ── OPTIONS /tasks/{id} (CORS preflight) ──
+  OptionsTaskByIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      ResourceId: !Ref TaskByIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # Deploy de la API
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetTasksMethod
+      - PostTaskMethod
+      - PutTaskMethod
+      - DeleteTaskMethod
+      - OptionsTasksMethod
+      - OptionsTaskByIdMethod
+    Properties:
+      RestApiId: !Ref TaskFlowApi
+      StageName: !Ref Environment
+
+  # ── Permisos Lambda para ser invocadas por API Gateway ──
+  PermissionListTasks:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ListTasksFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskFlowApi}/*'
+
+  PermissionCreateTask:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CreateTaskFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskFlowApi}/*'
+
+  PermissionUpdateTask:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UpdateTaskFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskFlowApi}/*'
+
+  PermissionDeleteTask:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DeleteTaskFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskFlowApi}/*'
+
+# ════════════════════════════════════════════════════════════
+#  OUTPUTS — Valores importantes post-deploy
+# ════════════════════════════════════════════════════════════
+Outputs:
+
+  ApiUrl:
+    Description: URL base de la API REST
+    Value: !Sub 'https://${TaskFlowApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${ProjectName}-api-url'
+
+  FrontendUrl:
+    Description: URL del sitio web estático en S3
+    Value: !GetAtt FrontendBucket.WebsiteURL
+    Export:
+      Name: !Sub '${ProjectName}-frontend-url'
+
+  FrontendBucketName:
+    Description: Nombre del bucket S3 del frontend
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub '${ProjectName}-frontend-bucket'
+
+  DynamoTableName:
+    Description: Nombre de la tabla DynamoDB
+    Value: !Ref TasksTable
+    Export:
+      Name: !Sub '${ProjectName}-table-name'

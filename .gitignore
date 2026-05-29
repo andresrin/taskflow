@@ -1,0 +1,52 @@
+# ─── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── Entornos virtuales ──────────────────────────────────────
+venv/
+.venv/
+env/
+.env
+ENV/
+
+# ─── Artefactos generados (no versionar ZIPs) ────────────────
+artifacts/
+*.zip
+
+# ─── AWS / Credenciales — NUNCA subir al repositorio ────────
+.aws/
+aws-credentials
+*.pem
+*.key
+.env.local
+.env.production
+secrets.yaml
+secrets.json
+
+# ─── IDEs ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Logs ────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Node (si se agrega frontend con npm en el futuro) ───────
+node_modules/
+package-lock.json

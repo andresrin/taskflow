@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaskFlow — Gestor de Tareas</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>&#9889; TaskFlow</h1>
+    <p>Gestor de tareas serverless en AWS</p>
+  </header>
+
+  <main>
+    <section class="form-section">
+      <h2>Nueva tarea</h2>
+      <div class="form-group">
+        <input type="text" id="title" placeholder="Título de la tarea" maxlength="100" />
+      </div>
+      <div class="form-group">
+        <textarea id="description" placeholder="Descripción (opcional)" rows="3"></textarea>
+      </div>
+      <div class="form-group">
+        <select id="priority">
+          <option value="low">Prioridad baja</option>
+          <option value="medium" selected>Prioridad media</option>
+          <option value="high">Prioridad alta</option>
+        </select>
+      </div>
+      <button id="btn-create" onclick="createTask()">+ Crear tarea</button>
+    </section>
+
+    <section class="tasks-section">
+      <div class="tasks-header">
+        <h2>Tareas</h2>
+        <span id="task-count" class="badge">0</span>
+      </div>
+      <div id="status-msg" class="status-msg hidden"></div>
+      <div id="tasks-list">
+        <div class="loading">Cargando tareas...</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>TaskFlow &bull; Arquitectura Serverless AWS &bull; Lambda + DynamoDB + API Gateway</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
